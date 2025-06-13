@@ -254,45 +254,7 @@
                 map.fitBounds(bounds);
             }
 
-            // Determine unique states from uploaded addresses, map to full names
-            const states = Array.from(new Set(uploadedAddresses.map(e => e.state))).filter(Boolean);
-            const stateNames = states.map(s => STATE_ABBR_TO_NAME[s.toUpperCase()] || s);
-            let stateWhere = '';
-            if (stateNames.length === 1) {
-                stateWhere = ` AND STATE = '${stateNames[0]}'`;
-            } else if (stateNames.length > 1) {
-                stateWhere = ` AND STATE IN (${stateNames.map(s => `'${s}'`).join(',')})`;
-            }
-
-            // Fetch and show rail lines for the relevant state(s)
-            try {
-                const params = new URLSearchParams({
-                    'outFields': '*',
-                    'f': 'geojson',
-                    'where': `RROWNER1 IN ('BNSF', 'UP', 'NS', 'CSXT', 'KCS', 'CN', 'CPRS')${stateWhere}`
-                });
-                const response = await fetch(`${FRA_BASE_URL}?${params}`);
-                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                const data = await response.json();
-                if (railLayer) map.removeLayer(railLayer);
-                railLayer = L.geoJSON(data, {
-                    style: { color: '#2c3e50', weight: 2, opacity: 0.8 },
-                    onEachFeature: function(feature, layer) {
-                        if (feature.properties) {
-                            const popupContent = `
-                                <strong>Railroad:</strong> ${feature.properties.RROWNER1}<br>
-                                <strong>Track Type:</strong> ${feature.properties.TRACKTYPE || 'N/A'}<br>
-                                <strong>Track Status:</strong> ${feature.properties.TRKSTATUS || 'N/A'}
-                            `;
-                            layer.bindPopup(popupContent);
-                        }
-                    }
-                }).addTo(map);
-            } catch (error) {
-                alert('Error loading rail data. Please try again later.');
-            } finally {
-                loadingOverlay.style.display = 'none';
-            }
+            loadingOverlay.style.display = 'none';
         }
     </script>
 </body>
