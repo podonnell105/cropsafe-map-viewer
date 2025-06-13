@@ -93,11 +93,23 @@
         // FRA MainLine MapServer REST endpoint
         const FRA_BASE_URL = "https://fragis.fra.dot.gov/arcgis/rest/services/FRA/MainLine/MapServer/0/query";
         
-        // Initialize map
-        const map = L.map('map').setView([41.8781, -93.0977], 7);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        // Initialize map with layer control
+        const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '© OpenStreetMap contributors'
-        }).addTo(map);
+        });
+        const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Tiles © Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+        });
+        const baseMaps = {
+            "OpenStreetMap": osmLayer,
+            "Satellite": satelliteLayer
+        };
+        const map = L.map('map', {
+            center: [41.8781, -93.0977],
+            zoom: 7,
+            layers: [osmLayer]
+        });
+        L.control.layers(baseMaps).addTo(map);
 
         // Add rail line layer
         let railLayer = null;
