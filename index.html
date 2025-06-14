@@ -246,17 +246,17 @@
         };
 
         // After map initialization
-        // Add draw control (circle only)
+        // Add draw control (polygon/lasso only)
         const drawnItems = new L.FeatureGroup();
         map.addLayer(drawnItems);
         const drawControl = new L.Control.Draw({
             draw: {
-                polygon: false,
+                polygon: true,
                 polyline: false,
                 rectangle: false,
                 marker: false,
                 circlemarker: false,
-                circle: true
+                circle: false
             },
             edit: false
         });
@@ -304,16 +304,15 @@
             loadingOverlay.style.display = 'none';
         }
 
-        // Rectangle (now circle) selection event
+        // Polygon (lasso) selection event
         map.on(L.Draw.Event.CREATED, function (e) {
-            if (e.layerType === 'circle') {
-                const circle = e.layer;
-                const center = circle.getLatLng();
-                const radius = circle.getRadius();
-                // Remove markers inside circle
+            if (e.layerType === 'polygon') {
+                const polygon = e.layer;
+                // Remove markers inside polygon
                 let toRemove = [];
                 markerRefs.forEach((ref, idx) => {
-                    if (center.distanceTo([ref.lat, ref.lon]) <= radius) {
+                    if (polygon.getBounds().contains([ref.lat, ref.lon]) &&
+                        leafletPointInPolygon([ref.lat, ref.lon], polygon.getLatLngs()[0])) {
                         addressLayer.removeLayer(ref.marker);
                         toRemove.push(idx);
                     }
@@ -323,12 +322,27 @@
                     uploadedAddresses.splice(toRemove[i], 1);
                     markerRefs.splice(toRemove[i], 1);
                 }
-                // Remove circle from map
-                map.removeLayer(circle);
+                // Remove polygon from map
+                map.removeLayer(polygon);
                 // Show/hide download button
                 document.getElementById('download-btn').style.display = markerRefs.length > 0 ? 'inline-block' : 'none';
             }
         });
+
+        // Helper: point-in-polygon for Leaflet LatLngs
+        function leafletPointInPolygon(point, polygonLatLngs) {
+            // point: [lat, lon], polygonLatLngs: array of L.LatLng
+            let x = point[1], y = point[0];
+            let inside = false;
+            for (let i = 0, j = polygonLatLngs.length - 1; i < polygonLatLngs.length; j = i++) {
+                let xi = polygonLatLngs[i].lng, yi = polygonLatLngs[i].lat;
+                let xj = polygonLatLngs[j].lng, yj = polygonLatLngs[j].lat;
+                let intersect = ((yi > y) !== (yj > y)) &&
+                    (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi);
+                if (intersect) inside = !inside;
+            }
+            return inside;
+        }
 
         // Download CSV logic
         document.getElementById('download-btn').addEventListener('click', function() {
