@@ -8,6 +8,7 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
     <style>
         #map {
             height: 600px;
@@ -59,7 +60,8 @@
 <body>
     <div class="container mt-4">
         <h1 class="mb-4">Rail Analysis Map</h1>
-        
+        <!-- Download Button -->
+        <button id="download-btn" class="btn btn-success mb-3" style="display:none;">Download Filtered CSV</button>
         <!-- Map Container -->
         <div id="map"></div>
         
@@ -67,7 +69,7 @@
         <div class="file-upload-container" id="drop-zone">
             <h5>Upload Address List</h5>
             <p class="text-muted">Drag and drop a CSV file or click to browse</p>
-            <input type="file" id="file-input" accept=".csv" style="display: none;">
+            <input type="file" id="file-input" accept=".csv" style="display: none;" multiple>
             <button class="btn btn-primary" onclick="document.getElementById('file-input').click()">
                 Choose File
             </button>
@@ -88,6 +90,7 @@
     <!-- Scripts -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
     
     <script>
         // FRA MainLine MapServer REST endpoint
@@ -116,7 +119,7 @@
         // Add address marker layer
         let addressLayer = null;
 
-        // Store uploaded addresses
+        // Store uploaded addresses from all CSVs
         let uploadedAddresses = [];
 
         // File upload handling
@@ -140,43 +143,52 @@
             dropZone.classList.remove('dragover');
             const files = e.dataTransfer.files;
             if (files.length > 0) {
-                handleFile(files[0]);
+                handleFiles(files);
             }
         });
 
         fileInput.addEventListener('change', (e) => {
             if (e.target.files.length > 0) {
-                handleFile(e.target.files[0]);
+                handleFiles(e.target.files);
             }
         });
 
-        function handleFile(file) {
-            if (file.type !== 'text/csv') {
-                alert('Please upload a CSV file');
-                return;
-            }
-
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                const text = e.target.result;
-                processCSV(text);
-            };
-            reader.readAsText(file);
+        // Handle multiple files
+        function handleFiles(fileList) {
+            let files = Array.from(fileList);
+            let readCount = 0;
+            files.forEach(file => {
+                if (file.type !== 'text/csv') {
+                    alert('Please upload a CSV file');
+                    return;
+                }
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const text = e.target.result;
+                    processCSV(text, () => {
+                        readCount++;
+                        if (readCount === files.length) {
+                            plotAddressesAndRail();
+                        }
+                    });
+                };
+                reader.readAsText(file);
+            });
         }
 
-        function processCSV(csvText) {
+        // Accept an optional callback for when done
+        function processCSV(csvText, cb) {
             const lines = csvText.split('\n');
-            uploadedAddresses = [];
-            addressPreview.innerHTML = '';
-
             // Find the address, coordinates, and state column indices
             const header = lines[0].split(',');
             let addressCol = header.findIndex(h => h.trim().toLowerCase() === 'address');
             let coordCol = header.findIndex(h => h.trim().toLowerCase() === 'coordinates');
             let stateCol = header.findIndex(h => h.trim().toLowerCase() === 'state');
+            let losCol = header.findIndex(h => h.trim().toLowerCase() === 'los_score');
             if (addressCol === -1) addressCol = 0; // fallback
             if (coordCol === -1) coordCol = 1; // fallback
             if (stateCol === -1) stateCol = 2; // fallback
+            if (losCol === -1) losCol = 3; // fallback
 
             for (let i = 1; i < lines.length; i++) {
                 const line = lines[i].trim();
@@ -186,19 +198,21 @@
                     const address = cols[addressCol]?.trim().replace(/^"|"$/g, '');
                     const coord = cols[coordCol]?.trim().replace(/^"|"$/g, '');
                     const state = cols[stateCol]?.trim().replace(/^"|"$/g, '');
+                    const los_score = cols[losCol]?.trim().replace(/^"|"$/g, '');
                     if (address && coord && state) {
-                        uploadedAddresses.push({ address, coord, state });
-                        const li = document.createElement('li');
-                        li.textContent = `${address} (${coord}) [${state}]`;
-                        addressPreview.appendChild(li);
+                        uploadedAddresses.push({ address, coord, state, los_score });
                     }
                 }
             }
-
+            // Update preview
+            addressPreview.innerHTML = '';
+            uploadedAddresses.forEach(e => {
+                const li = document.createElement('li');
+                li.textContent = `${e.address} (${e.coord}) [${e.state}]`;
+                addressPreview.appendChild(li);
+            });
             filePreview.style.display = 'block';
-            if (uploadedAddresses.length > 0) {
-                plotAddressesAndRail();
-            }
+            if (cb) cb();
         }
 
         // Helper to parse a CSV line with quoted fields
@@ -231,18 +245,37 @@
             WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming'
         };
 
-        // Plot pins using coordinates, then show rail lines for the relevant state(s)
+        // After map initialization
+        // Add draw control (circle only)
+        const drawnItems = new L.FeatureGroup();
+        map.addLayer(drawnItems);
+        const drawControl = new L.Control.Draw({
+            draw: {
+                polygon: false,
+                polyline: false,
+                rectangle: false,
+                marker: false,
+                circlemarker: false,
+                circle: true
+            },
+            edit: false
+        });
+        map.addControl(drawControl);
+
+        // Store marker references for deletion
+        let markerRefs = [];
+
+        // Overwrite plotAddressesAndRail to store marker references and show download button
         async function plotAddressesAndRail() {
             const loadingOverlay = document.getElementById('loading-overlay');
             loadingOverlay.style.display = 'flex';
 
-            // Remove previous address markers
             if (addressLayer) {
                 map.removeLayer(addressLayer);
             }
             addressLayer = L.layerGroup();
+            markerRefs = [];
 
-            // Plot each address using coordinates as green dots
             const latlngs = [];
             for (let entry of uploadedAddresses) {
                 let coordStr = entry.coord.replace(/[()]/g, '').replace(/"/g, '').trim();
@@ -251,13 +284,14 @@
                     const lat = parts[0];
                     const lon = parts[1];
                     latlngs.push([lat, lon]);
-                    L.circleMarker([lat, lon], {
+                    const marker = L.circleMarker([lat, lon], {
                         radius: 4,
                         color: '#28a745',
                         fillColor: '#28a745',
                         fillOpacity: 0.90,
                         weight: 1
                     }).addTo(addressLayer).bindPopup(`<strong>${entry.address}</strong><br><small>${lat}, ${lon}</small><br><small>State: ${entry.state}</small>`);
+                    markerRefs.push({ marker, entry, lat, lon });
                 }
             }
             addressLayer.addTo(map);
@@ -265,9 +299,58 @@
                 const bounds = L.latLngBounds(latlngs);
                 map.fitBounds(bounds);
             }
-
+            // Show download button if there are markers
+            document.getElementById('download-btn').style.display = markerRefs.length > 0 ? 'inline-block' : 'none';
             loadingOverlay.style.display = 'none';
         }
+
+        // Rectangle (now circle) selection event
+        map.on(L.Draw.Event.CREATED, function (e) {
+            if (e.layerType === 'circle') {
+                const circle = e.layer;
+                const center = circle.getLatLng();
+                const radius = circle.getRadius();
+                // Remove markers inside circle
+                let toRemove = [];
+                markerRefs.forEach((ref, idx) => {
+                    if (center.distanceTo([ref.lat, ref.lon]) <= radius) {
+                        addressLayer.removeLayer(ref.marker);
+                        toRemove.push(idx);
+                    }
+                });
+                // Remove from uploadedAddresses and markerRefs
+                for (let i = toRemove.length - 1; i >= 0; i--) {
+                    uploadedAddresses.splice(toRemove[i], 1);
+                    markerRefs.splice(toRemove[i], 1);
+                }
+                // Remove circle from map
+                map.removeLayer(circle);
+                // Show/hide download button
+                document.getElementById('download-btn').style.display = markerRefs.length > 0 ? 'inline-block' : 'none';
+            }
+        });
+
+        // Download CSV logic
+        document.getElementById('download-btn').addEventListener('click', function() {
+            if (uploadedAddresses.length === 0) return;
+            // Compose CSV
+            const header = 'address,coordinates,state,los_score';
+            const rows = uploadedAddresses.map(e => {
+                // Try to preserve original CSV quoting
+                return `"${e.address.replace(/"/g, '""')}","${e.coord.replace(/"/g, '""')}",${e.state || ''},${e.los_score || ''}`;
+            });
+            const csv = [header, ...rows].join('\n');
+            // Download
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'filtered_addresses.csv';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
     </script>
 </body>
 </html> 
